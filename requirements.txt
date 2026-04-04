@@ -1,0 +1,18 @@
+# ==============================================================================
+# MTG RAG Pipeline — Dependencies
+# ==============================================================================
+
+# --- Core ETL ---
+psycopg2-binary==2.9.10       # Postgres driver (binary wheel, no libpq needed)
+python-dotenv==1.1.0           # .env loading
+
+# --- Downstream RAG / vector search ---
+streamlit==1.45.1
+langchain==0.3.25
+langchain-openai==0.3.23
+langchain-postgres==0.0.13     # pgvector LangChain integration
+openai==1.88.0
+pgvector==0.3.6                # Python pgvector helpers (register_vector, etc.)
+
+# --- Utilities ---
+rapidfuzz==3.13.0              # Fuzzy card-name matching
