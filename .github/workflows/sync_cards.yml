@@ -1,5 +1,5 @@
 # ==============================================================================
-# Automated weekly sync of MTGJson AtomicCards → Neon Postgres
+# Automated weekly sync: ETL + embeddings → Neon Postgres
 #
 # Credentials are stored as GitHub Secrets — never in code.
 # To set up: Settings → Secrets → Actions → add DATABASE_URL
@@ -26,9 +26,13 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install psycopg2-binary python-dotenv
+        run: pip install -r requirements.txt
 
-      - name: Run foundation ETL
+      - name: Run full pipeline (ETL + embeddings)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EMBEDDING_BACKEND: ${{ secrets.EMBEDDING_BACKEND || 'huggingface' }}
+          HF_EMBED_MODEL: ${{ secrets.HF_EMBED_MODEL || 'sentence-transformers/all-MiniLM-L6-v2' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
+          OPENAI_EMBED_MODEL: ${{ secrets.OPENAI_EMBED_MODEL || 'text-embedding-3-small' }}
         run: python -m etl.pipeline

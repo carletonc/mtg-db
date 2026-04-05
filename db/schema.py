@@ -23,9 +23,14 @@ Design decisions (validated via json_normalize EDA on 34,475 rows):
 
 6. **Boolean flags** coerced null→False at ETL time (MTGJson only includes
    isFunny/isReserved/isGameChanger/hasAlternativeDeckLimit when True).
+
+7. **Unified embeddings table** — stores vectors from any source (cards,
+   rules, etc.) with a `source` discriminator.  Vector dimension is set
+   at table creation based on the configured embedding model.
 """
 
 from db.connection import get_connection, get_cursor
+from utils.embeddings import get_dimension
 
 # --------------------------------------------------------------------------- #
 #  Foundational cards table                                                    #
@@ -106,6 +111,22 @@ CREATE INDEX IF NOT EXISTS idx_cards_colors      ON cards USING GIN (colors);
 CREATE INDEX IF NOT EXISTS idx_cards_types       ON cards USING GIN (types);
 CREATE INDEX IF NOT EXISTS idx_cards_keywords    ON cards USING GIN (keywords);
 CREATE INDEX IF NOT EXISTS idx_cards_legalities  ON cards USING GIN (legalities);
+
+-- Future: taxonomy tag columns ------------------------------------------------
+-- If we decide to tag cards with taxonomy keys (from utils/mtg_taxonomy.py),
+-- add a column here.  Example:
+--
+--   taxonomy_tags   TEXT[],   -- e.g. {'interaction.targeted_removal.burn', 'evasion'}
+--
+-- And a GIN index:
+--   CREATE INDEX IF NOT EXISTS idx_cards_taxonomy ON cards USING GIN (taxonomy_tags);
+--
+-- This would let the retrieval layer do:
+--   SELECT * FROM cards WHERE 'ramp.land_tutor' = ANY(taxonomy_tags)
+-- instead of (or in addition to) vector search.
+-- Tagging logic would live in etl/embed.py using oracle_hints patterns.
+-- For now, the taxonomy is decoupled -- used only at query time.
+-- -----------------------------------------------------------------------------
 """
 
 # --------------------------------------------------------------------------- #
@@ -127,39 +148,58 @@ CREATE TABLE IF NOT EXISTS sync_log (
 );
 """
 
+
 # --------------------------------------------------------------------------- #
-#  pgvector extension + downstream vector table                                #
+#  Unified embeddings table (pgvector)                                         #
 # --------------------------------------------------------------------------- #
-VECTOR_TABLE_DDL = """
+
+
+def _embeddings_ddl(dim: int) -> str:
+    """Build DDL for the embeddings table using the active model's dimension."""
+    return f"""
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS card_embeddings (
-    scryfall_oracle_id  TEXT        NOT NULL,
-    face_index          SMALLINT    NOT NULL DEFAULT 0,
-    chunk_index         SMALLINT    NOT NULL DEFAULT 0,
-    chunk_text          TEXT        NOT NULL,
-    embedding           vector(1536),
-    model               TEXT        NOT NULL DEFAULT 'text-embedding-3-small',
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+CREATE TABLE IF NOT EXISTS embeddings (
+    id              TEXT        NOT NULL,  -- source-specific key
+    source          TEXT        NOT NULL,  -- 'card', 'rules', etc.
+    chunk_index     SMALLINT    NOT NULL DEFAULT 0,
+    chunk_text      TEXT        NOT NULL,
+    chunk_hash      TEXT        NOT NULL DEFAULT '',  -- md5(chunk_text) for change detection
+    embedding       vector({dim}),
+    model           TEXT        NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (scryfall_oracle_id, face_index, chunk_index),
-    FOREIGN KEY (scryfall_oracle_id, face_index)
-        REFERENCES cards (scryfall_oracle_id, face_index)
-        ON DELETE CASCADE
+    PRIMARY KEY (id, source, chunk_index)
 );
 
-CREATE INDEX IF NOT EXISTS idx_card_embeddings_vec
-    ON card_embeddings
+CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings (source);
+CREATE INDEX IF NOT EXISTS idx_embeddings_vec
+    ON embeddings
     USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 """
 
 
+# --------------------------------------------------------------------------- #
+#  Migration: add chunk_hash column if upgrading from a pre-v2 schema          #
+# --------------------------------------------------------------------------- #
+_MIGRATIONS = [
+    """
+    ALTER TABLE embeddings ADD COLUMN IF NOT EXISTS
+        chunk_hash TEXT NOT NULL DEFAULT '';
+    """,
+]
+
+
 def create_all_tables():
     """Run all DDL statements to bootstrap the database."""
+    dim = get_dimension()
     with get_connection() as conn:
         with get_cursor(conn) as cur:
             cur.execute(CARDS_DDL)
             cur.execute(SYNC_LOG_DDL)
-            cur.execute(VECTOR_TABLE_DDL)
-    print("✓ All tables and indexes created.")
+            cur.execute(_embeddings_ddl(dim))
+            for migration in _MIGRATIONS:
+                cur.execute(migration)
+    print(f"✓ All tables and indexes created (embedding dim={dim}).")
+    print("✓ Migrations applied.")
