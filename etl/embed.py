@@ -307,7 +307,7 @@ def embed_source(
     source_name: str,
     *,
     full_refresh: bool = False,
-    batch_size: int = 200,
+    batch_size: int = 10,
 ):
     """
     Embed a single source and upsert into the embeddings table.
