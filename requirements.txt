@@ -1,12 +1,12 @@
 # Core
 #python==3.11
-psycopg2-binary==2.9
-python-dotenv==1.1
+psycopg2>=2.9
+python-dotenv>=1.1
 
 # Embedding backends (install the one you need)
 # Default: HuggingFace (free, local)
-sentence-transformers==5.3
-torch==2.7
+sentence-transformers>=5.3
+torch>=2.7
 
 # Optional: OpenAI (set EMBEDDING_BACKEND=openai in .env)
-# openai==1.88.0
+# openai>=1.88.0
