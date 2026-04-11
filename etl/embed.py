@@ -100,25 +100,25 @@ def _build_card_text_chunk(row: dict) -> str:
     """
     parts = []
 
-    display_name = row["face_name"] or row["name"]
-    parts.append(display_name)
-    parts.append(row["type_line"])
+    #display_name = row["face_name"] or row["name"]
+    #parts.append(display_name)
+    #parts.append(row["type_line"])
 
-    if row["mana_cost"]:
-        parts.append(f"Mana Cost: {preprocess_mana_cost(row['mana_cost'])}")
+    #if row["mana_cost"]:
+    #    parts.append(f"Mana Cost: {preprocess_mana_cost(row['mana_cost'])}")
 
     # Power/toughness with variable expansion
-    if row["power"] is not None:
-        pt = preprocess_power_toughness(row["power"], row["toughness"])
-        parts.append(pt)
+    #if row["power"] is not None:
+    #    pt = preprocess_power_toughness(row["power"], row["toughness"])
+    #    parts.append(pt)
 
     # Loyalty (planeswalkers)
-    if row["loyalty"] is not None:
-        parts.append(preprocess_loyalty(row["loyalty"]))
+    #if row["loyalty"] is not None:
+    #    parts.append(preprocess_loyalty(row["loyalty"]))
 
     # Defense (battles)
-    if row["defense"] is not None:
-        parts.append(f"Defense: {row['defense']}")
+    #if row["defense"] is not None:
+    #    parts.append(f"Defense: {row['defense']}")
 
     # Oracle text — the big one: full symbol expansion + self-ref replacement
     if row["oracle_text"]:
@@ -128,8 +128,8 @@ def _build_card_text_chunk(row: dict) -> str:
         )
         parts.append(clean)
 
-    if row["keywords"]:
-        parts.append(f"Keywords: {', '.join(row['keywords'])}")
+    #if row["keywords"]:
+    #    parts.append(f"Keywords: {', '.join(row['keywords'])}")
 
     # ── Future: taxonomy tagging ──────────────────────────────────
     # If we decide to tag cards with taxonomy keys at embedding time,
