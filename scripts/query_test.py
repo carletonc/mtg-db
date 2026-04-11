@@ -39,17 +39,39 @@ def _vector_search(cur, query_text: str, source: str, limit: int = 5):
     from utils.embeddings import get_embeddings
 
     qvec = get_embeddings([query_text])[0]
-    cur.execute(
-        """
-        SELECT e.id, e.chunk_text,
-               1 - (e.embedding <=> %s::vector) AS similarity
-        FROM embeddings e
-        WHERE e.source = %s AND e.embedding IS NOT NULL
-        ORDER BY e.embedding <=> %s::vector
-        LIMIT %s
-        """,
-        (qvec, source, qvec, limit),
-    )
+    if source in ("card_name", "card_text"):
+        query = """
+            SELECT 
+                e.id, 
+                c.name, 
+                e.chunk_text, 
+                1 - (e.embedding <=> %s::vector) AS similarity
+            FROM embeddings e
+            JOIN cards c 
+                ON c.scryfall_oracle_id = split_part(e.id, ':', 1)
+                AND c.face_index = split_part(e.id, ':', 2)::int
+            WHERE e.source = %s AND e.embedding IS NOT NULL
+            ORDER BY e.embedding <=> %s::vector
+            LIMIT %s
+            """
+        qparams = (qvec, source, qvec, limit)
+            
+    elif source == "rules":
+        query = """
+            SELECT 
+                e.id, 
+                e.chunk_text, 
+                1 - (e.embedding <=> %s::vector) AS similarity
+            FROM embeddings e
+            WHERE e.source = 'rules' AND e.embedding IS NOT NULL
+            ORDER BY e.embedding <=> %s::vector
+            LIMIT %s
+            """
+        qparams = (qvec, qvec, limit)
+        
+    else:
+        raise ValueError(f"Unknown source: {source}")
+    cur.execute(query, qparams)
     return cur.fetchall()
 
 
@@ -64,18 +86,18 @@ def test_foundation_stats(cur, verbose: bool):
     print("  " + "─" * 46)
 
     cur.execute("SELECT count(*) FROM cards")
-    total = cur.fetchone()[0]
+    total = cur.fetchone()['count']
 
     cur.execute("SELECT count(DISTINCT scryfall_oracle_id) FROM cards")
-    unique_oracles = cur.fetchone()[0]
+    unique_oracles = cur.fetchone()['count']
 
     cur.execute("SELECT count(*) FROM cards WHERE face_index > 0")
-    extra_faces = cur.fetchone()[0]
+    extra_faces = cur.fetchone()['count']
 
     cur.execute(
         "SELECT count(*) FROM cards WHERE content_hash IS NULL OR content_hash = ''"
     )
-    missing_hash = cur.fetchone()[0]
+    missing_hash = cur.fetchone()['count']
 
     # PK uniqueness (should always be 0 by constraint, but verify)
     cur.execute("""
@@ -102,16 +124,16 @@ def test_sync_log(cur, verbose: bool):
     cur.execute(
         "SELECT count(*) FROM sync_log WHERE status = 'success'"
     )
-    successes = cur.fetchone()[0]
+    successes = cur.fetchone()['count']
     if successes > 0:
         cur.execute(
             "SELECT source_version, total_cards, inserted, updated, unchanged "
             "FROM sync_log WHERE status = 'success' ORDER BY id DESC LIMIT 1"
         )
         row = cur.fetchone()
-        print(f"     Last sync: v{row[0]} — "
-              f"{row[1]:,} total, {row[2]:,} ins, "
-              f"{row[3]:,} upd, {row[4]:,} unch")
+        print(f"     Last sync: v{row['source_version']} — "
+              f"{row['total_cards']:,} total, {row['inserted']:,} ins, "
+              f"{row['updated']:,} upd, {row['unchanged']:,} unch")
     ok = successes > 0
     print(f"  {PASS if ok else WARN}  Sync log: {successes} successful run(s)")
     return ok
@@ -130,7 +152,7 @@ def test_exact_name_lookup(cur, verbose: bool):
         if row:
             found += 1
             if verbose:
-                print(f"     {PASS} {row[0]:20s} | {row[1]}")
+                print(f"     {PASS} {row['name']:20s} | {row['type_line']:30s} | {row['oracle_text'][:50]}...")
         else:
             print(f"     {FAIL} '{name}' not found")
 
@@ -157,7 +179,7 @@ def test_text_phrase_search(cur, verbose: bool):
             "SELECT count(*) FROM cards WHERE oracle_text ILIKE %s",
             (f"%{phrase}%",),
         )
-        count = cur.fetchone()[0]
+        count = cur.fetchone()['count']
         ok = count >= min_expected
         if not ok:
             all_ok = False
@@ -178,7 +200,7 @@ def test_embedding_coverage(cur, verbose: bool):
     cur.execute(
         "SELECT source, count(*) FROM embeddings GROUP BY source ORDER BY source"
     )
-    sources = {row[0]: row[1] for row in cur.fetchall()}
+    sources = {row['source']: row['count'] for row in cur.fetchall()}
 
     expected_sources = {
         "card_name": 30000,
@@ -206,7 +228,7 @@ def test_vector_search_card_name(cur, verbose: bool):
     print("  " + "─" * 46)
 
     cur.execute("SELECT count(*) FROM embeddings WHERE source = 'card_name'")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone()['count'] == 0:
         print(f"  {WARN}  No card_name embeddings — skipping")
         return None
 
@@ -219,7 +241,7 @@ def test_vector_search_card_name(cur, verbose: bool):
     all_ok = True
     for query, expected_top in queries.items():
         results = _vector_search(cur, query, "card_name", limit=5)
-        top_name = results[0][1] if results else "(none)"
+        top_name = results[0]['chunk_text'] if results else "(none)"
         ok = top_name == expected_top
         if not ok:
             all_ok = False
@@ -243,7 +265,7 @@ def test_vector_search_card_text(cur, verbose: bool):
     print("  " + "─" * 46)
 
     cur.execute("SELECT count(*) FROM embeddings WHERE source = 'card_text'")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone()['count'] == 0:
         print(f"  {WARN}  No card_text embeddings — skipping")
         return None
 
@@ -256,11 +278,14 @@ def test_vector_search_card_text(cur, verbose: bool):
 
     for query in queries:
         results = _vector_search(cur, query, "card_text", limit=5)
-        print(f"     Query: \"{query}\"")
-        for _, chunk, sim in results:
+        for row in results:
+            
+            #card_id = row['id']
+            name = row['name']
+            text = row['chunk_text'][:50] #.split("\n")[0][:50]
+            sim = row['similarity']
             # Show first line (card name) from the chunk
-            first_line = chunk.split("\n")[0][:50]
-            print(f"       {sim:.4f}  {first_line}")
+            print(f"       {sim:.4f}  {name}  {text}...")
 
     print(f"  {PASS}  Card text vector search returned results")
     return True
@@ -272,7 +297,7 @@ def test_vector_search_rules(cur, verbose: bool):
     print("  " + "─" * 46)
 
     cur.execute("SELECT count(*) FROM embeddings WHERE source = 'rules'")
-    if cur.fetchone()[0] == 0:
+    if cur.fetchone()['count'] == 0:
         print(f"  {WARN}  No rules embeddings — skipping")
         return None
 
@@ -286,9 +311,11 @@ def test_vector_search_rules(cur, verbose: bool):
     for query in queries:
         results = _vector_search(cur, query, "rules", limit=3)
         print(f"     Query: \"{query}\"")
-        for _, chunk, sim in results:
-            first_line = chunk.split("\n")[0][:60]
-            print(f"       {sim:.4f}  {first_line}")
+        for row in results:
+            #id = row['id']
+            text = row['chunk_text'][:60]
+            sim = row['similarity']
+            print(f"       {sim:.4f}  {text}...")
 
     print(f"  {PASS}  Rules vector search returned results")
     return True
